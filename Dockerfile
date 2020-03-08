@@ -22,6 +22,6 @@ FROM scratch
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /go/src/atlassian_upm_exporter/atlassian_upm_exporter /bin/
 
-EXPOSE 9997
+EXPOSE 9996
 
 ENTRYPOINT ["/bin/atlassian_upm_exporter"]

@@ -34,7 +34,7 @@ var (
 	enableColLogs    = flag.Bool("enable-color-logs", false, "when developing in debug mode, prettier to set this for visual colors")
 	fqdn             = flag.String("app.fqdn", "", "REQUIRED: provide the application fqdn to be monitored (ie. bitbucket.domain.com)")
 	help             = flag.Bool("help", false, "help will display this helpful dialog output")
-	port             = flag.String("svc.port", "9997", "can pass in the port to listen on.")
+	port             = flag.String("svc.port", "9996", "can pass in the port to listen on.")
 	protocol         = flag.String("app.protocol", "https", "set the protocol used to interact with the application")
 	token            = flag.String("app.token", "", "REQUIRED: provide a Basic access token to connect with")
 	userInstalled    = flag.Bool("user-installed", false, "if you would like 'user-installed' plugins only")
@@ -51,7 +51,7 @@ var (
 		"atlassian_upm_plugin_version_available{availableVersion='',enabled='',installedVersion='',name='',url='',userInstalled=''} 0\n" +
 		"atlassian_upm_rest_url_up{url=''} 0\n" +
 		"\nReference:\n" +
-		"https://marketplace.atlassian.com/apps/23915/atlassian-universal-plugin-manager\n" +
+		"https://confluence.atlassian.com/upm/universal-plugin-manager-documentation-273875696.html\n" +
 		"\nUsage of atlassian_upm_exporter [Arguments]\n" +
 		"\nArguments:\n"
 )
@@ -131,58 +131,68 @@ func (collector *atlassianUPMCollector) Describe(ch chan<- *prometheus.Desc) {
 // Collect implements required collect function for all prometheus collectors
 func (collector *atlassianUPMCollector) Collect(ch chan<- prometheus.Metric) {
 	startTime := time.Now()
+	log.Debug("Collect start")
 
-	log.Debug("create a request object")
+	log.Debug("create request object")
 	req, err := http.NewRequest("GET", baseURL, nil)
 	if err != nil {
 		log.Error("http.NewRequest returned an error:", err)
 	}
 
-	log.Debug("create a Basic auth string from argument passed")
+	log.Debug("create Basic auth string from argument passed")
 	bearer = "Basic " + *token
 
 	log.Debug("add authorization header to the request")
 	req.Header.Add("Authorization", bearer)
 
-	log.Debug("set content type on the request")
+	log.Debug("add content type to the request")
 	req.Header.Add("content-type", "application/json")
 
-	log.Debug("make request, get back a response")
+	log.Debug("make request... get back a response")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Warn("http.DefaultClient.Do returned an error:", err)
+		log.Debug("set metric atlassian_upm_rest_url_up")
 		ch <- prometheus.MustNewConstMetric(collector.atlassianUPMUpMetric, prometheus.GaugeValue, 0, *fqdn)
+		log.Warn("http.DefaultClient.Do returned an error:", err, " return from Collect")
 		return
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		log.Debug("response status code: ", resp.StatusCode)
+	}
+
+	log.Debug("set metric atlassian_upm_rest_url_up")
 	ch <- prometheus.MustNewConstMetric(collector.atlassianUPMUpMetric, prometheus.GaugeValue, 1, *fqdn)
 
-	statusCode := resp.StatusCode
-	if statusCode == 200 {
-		// get all plugins out of the response json
-		allPlugins := plugins(resp)
+	var allPlugins restPlugins
+	if resp.StatusCode == 200 {
+		log.Debug("get all plugins")
+		allPlugins = plugins(resp)
 
-		// return user-installed plugins
+		// return user-installed plugins if argument passed
 		if *userInstalled {
+			log.Debug("-user-installed found")
 			allPlugins = userInstalledPlugins(allPlugins)
 		}
 
 		// plugins have the ability to be installed, but disabled, this will remove them if disabled
 		if *dropDisabled {
+			log.Debug("-drop-disabled found")
 			allPlugins = dropDisabledPlugins(allPlugins)
 		}
 
 		// Jira specific
 		// some plugins maintained by Jira have an additional element, this gives the option to drop those plugins
 		if *dropJiraSoftware {
+			log.Debug("-drop-jira-software found")
 			allPlugins = dropJiraSoftwarePlugins(allPlugins)
 		}
 
 		log.Debug("range over values in response, add each as metric with labels")
 		for _, plugin := range allPlugins.Plugins {
 
-			log.Debug("creating metric for " + plugin.Name)
+			log.Debug("creating plugin metric for: " + plugin.Name)
 			ch <- prometheus.MustNewConstMetric(
 				collector.atlassianUPMPlugins,
 				prometheus.GaugeValue,
@@ -195,33 +205,34 @@ func (collector *atlassianUPMCollector) Collect(ch chan<- prometheus.Metric) {
 				*fqdn,
 			)
 		}
+	}
 
-		if *checkUpdates {
-			availablePluginsMap := getAvailablePluginInfo(allPlugins)
+	if resp.StatusCode == 200 && *checkUpdates {
+		log.Debug("get remaining plugins available info")
+		availablePluginsMap := getAvailablePluginInfo(allPlugins)
 
-			log.Debug("range over values in response, add each as metric with labels")
-			for _, plugin := range availablePluginsMap {
-				availableUpdate := false
+		log.Debug("range over values in response, add each as metric with labels")
+		for _, plugin := range availablePluginsMap {
+			availableUpdate := false
 
-				if plugin.InstalledVersion != plugin.Version {
-					log.Debug("'" + plugin.Name + "' is currently running '" + plugin.InstalledVersion + "' and can be upgraded to '" + plugin.Version + "'")
-					availableUpdate = true
-				}
-
-				log.Debug("creating metric for " + plugin.Name)
-				ch <- prometheus.MustNewConstMetric(
-					collector.atlassianUPMVersionsMetric,
-					prometheus.GaugeValue,
-					boolToFloat(availableUpdate),
-					string(plugin.Name),
-					string(plugin.Key),
-					string(plugin.Version),
-					string(plugin.InstalledVersion),
-					strconv.FormatBool(plugin.Enabled), // convert bool to string for the 'enabled' value in the labels
-					strconv.FormatBool(plugin.UserInstalled),
-					*fqdn,
-				)
+			if plugin.InstalledVersion != plugin.Version {
+				log.Debug("plugin: ", plugin.Name, ", is currently running: ", plugin.InstalledVersion, ", and can be upgraded to: ", plugin.Version)
+				availableUpdate = true
 			}
+
+			log.Debug("creating plugin version metric for: ", plugin.Name, ", with Key: ", plugin.Key)
+			ch <- prometheus.MustNewConstMetric(
+				collector.atlassianUPMVersionsMetric,
+				prometheus.GaugeValue,
+				boolToFloat(availableUpdate),
+				string(plugin.Name),
+				string(plugin.Key),
+				string(plugin.Version),
+				string(plugin.InstalledVersion),
+				strconv.FormatBool(plugin.Enabled), // convert bool to string for the 'enabled' value in the labels
+				strconv.FormatBool(plugin.UserInstalled),
+				*fqdn,
+			)
 		}
 	}
 
@@ -229,7 +240,8 @@ func (collector *atlassianUPMCollector) Collect(ch chan<- prometheus.Metric) {
 	elapsedTime := finishTime.Sub(startTime)
 	log.Debug("set the duration metric")
 	ch <- prometheus.MustNewConstMetric(collector.atlassianUPMTimeMetric, prometheus.GaugeValue, elapsedTime.Seconds(), *fqdn)
-	log.Debug("collect finished")
+
+	log.Debug("Collect finished")
 }
 
 // restPlugins structure associated with the rest/plugins/1.0/ endpoint.
@@ -327,18 +339,7 @@ func userInstalledPlugins(restPluginsMap restPlugins) restPlugins {
 				log.Debug("dropping: ", plugin.Name)
 			}
 		}
-
-		// // We always want to keep the UPM, since this is the UPM exporter
-		// if plugin.Name == "Atlassian Universal Plugin Manager Plugin" {
-		// 	tempMap.Plugins = append(tempMap.Plugins, plugin)
-		// }
-
-		// // This is a Jira app that the user has control to update in the interface
-		// if plugin.Name == "Atlassian Troubleshooting and Support Tools" {
-		// 	tempMap.Plugins = append(tempMap.Plugins, plugin)
-		// }
 	}
-
 	return tempMap
 }
 
@@ -377,8 +378,9 @@ func dropJiraSoftwarePlugins(plugins restPlugins) restPlugins {
 func getAvailablePluginInfo(restPluginsMap restPlugins) []restPluginsAvailable {
 	var availablePluginsMap []restPluginsAvailable
 	for _, plugin := range restPluginsMap.Plugins {
+		log.Debug("getting: ", plugin.Name, ", available info")
 		availablePluginURL := baseURL + "available/" + plugin.Key + "-key"
-		log.Debug("request: " + availablePluginURL)
+		log.Debug("requesting URL: " + availablePluginURL)
 		req, err := http.NewRequest("GET", availablePluginURL, nil)
 		if err != nil {
 			log.Error("http.NewRequest returned an error:", err)
@@ -387,23 +389,30 @@ func getAvailablePluginInfo(restPluginsMap restPlugins) []restPluginsAvailable {
 		log.Debug("add authorization header to the request")
 		req.Header.Add("Authorization", bearer)
 
-		log.Debug("make request, get back a response")
+		log.Debug("make request... get back a response")
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Error("http.DefaultClient.Do returned an error:", err)
 		}
 		defer res.Body.Close()
-		log.Debug("response status code: ", res.StatusCode)
+
+		if res.StatusCode != 200 {
+			log.Debug("response status code: ", res.StatusCode, " continuing to next plugin")
+			continue
+		}
 
 		log.Debug("get the body out of the response")
 		body, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			log.Error("ioutil.ReadAll returned an error:", err)
 		}
+
 		if len(body) < 1 {
 			log.Debug("body was empty, continue to next plugin")
 			continue
 		}
+
+		log.Debug("create temp map object")
 		var tempMap restPluginsAvailable
 
 		log.Debug("unmarshal (turn unicode back into a string) request body into map structure")
@@ -416,6 +425,7 @@ func getAvailablePluginInfo(restPluginsMap restPlugins) []restPluginsAvailable {
 		// add the enabled value from the plugin map to the available map
 		tempMap.Enabled = plugin.Enabled
 
+		log.Debug("adding plugin: ", tempMap.Name, ", and Key: ", tempMap.Key)
 		availablePluginsMap = append(availablePluginsMap, tempMap)
 
 	}
@@ -434,6 +444,8 @@ func boolToFloat(b bool) float64 {
 func main() {
 	flag.Parse()
 
+	// Can't log.Debug, because it doesn't exist at the moment
+
 	// check if help has been passed
 	if *help {
 		usage()
@@ -449,7 +461,7 @@ func main() {
 		usage()
 	}
 
-	// adjust the logrus logger. Disable colors by default (adjustable with enable-color-logs option). Enable full time-stamps by default
+	// adjust the logrus logger if arguments passed
 	if *enableColLogs {
 		disableCol = false
 	}
@@ -458,14 +470,13 @@ func main() {
 		DisableColors: disableCol,
 	})
 
-	// check for debug option, adjust if set
+	// check for debug argument
 	if *debug {
 		log.SetLevel(log.DebugLevel)
-		log.Debug("Log Level: debug")
+		log.Debug("set log level to: debug")
 	}
 
-	// Create a new instance of the Collector and then
-	// register it with the prometheus client.
+	// Create a new instance of the Collector and then register it with the prometheus client.
 	upmCollector := newAtlassianUPMCollector()
 	prometheus.MustRegister(upmCollector)
 
@@ -485,9 +496,9 @@ func main() {
 	log.Debug("add /metrics handler")
 	http.Handle("/metrics", promhttp.Handler())
 
-	log.Debug("set url from arguments")
+	log.Debug("set rest plugins url from arguments")
 	baseURL = *protocol + "://" + *fqdn + "/rest/plugins/latest/"
-	log.Debug("request url: ", baseURL)
+	log.Debug("url: ", baseURL)
 
 	log.Debug("make a channel of type os.Signal with a 1 space buffer size")
 	ch := make(chan os.Signal, 1)
