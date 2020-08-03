@@ -57,5 +57,12 @@ docker run -it --rm -p 9996:9996 atlassian_upm_exporter -app.fqdn="<bitbucket|co
 
 ## References
 
+Thank you everyone that writes code and docs!
+
+* [https://golang.org/](https://golang.org/)
+* [https://prometheus.io/](https://prometheus.io/)
+* [https://github.com/Sirupsen/logrus](https://github.com/Sirupsen/logrus)
+* [github.com/hashicorp/go-version](github.com/hashicorp/go-version)
+* [https://www.atlassian.com/](https://www.atlassian.com/)
 * [https://confluence.atlassian.com/upm/universal-plugin-manager-documentation-273875696.html](https://confluence.atlassian.com/upm/universal-plugin-manager-documentation-273875696.html)
 * [https://ecosystem.atlassian.net/wiki/spaces/UPM/pages/6094960/UPM+REST+API](https://ecosystem.atlassian.net/wiki/spaces/UPM/pages/6094960/UPM+REST+API)

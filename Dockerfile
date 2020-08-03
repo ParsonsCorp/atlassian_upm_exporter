@@ -1,4 +1,4 @@
-FROM golang:1.13.7-alpine3.11 as build
+FROM golang:1.14.4-alpine3.11 as build
 
 RUN \
   echo -e "\e[32madd build dependency packages\e[0m" \

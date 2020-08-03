@@ -15,6 +15,8 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/hashicorp/go-version"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -76,7 +78,7 @@ func newAtlassianUPMCollector() *atlassianUPMCollector {
 	return &atlassianUPMCollector{
 		atlassianUPMTimeMetric: prometheus.NewDesc(
 			metricNamespace+"_collect_duration_seconds",
-			"Used to keep track of how long the Atlassian Universal Plugin Manager (UPM) took to Collect",
+			"metric used to keep track of how long the "+exporterName+" took to Collect",
 			[]string{
 				"url",
 			},
@@ -84,7 +86,7 @@ func newAtlassianUPMCollector() *atlassianUPMCollector {
 		),
 		atlassianUPMUpMetric: prometheus.NewDesc(
 			metricNamespace+"_rest_url_up",
-			"Used to check if the Atlassian Universal Plugin Manager (UPM) rest endpoint is accessible (https://<app.fqdn>/rest/plugins/1.0/), value is true if up",
+			"metric used to check if the "+exporterName+" rest endpoint is accessible (https://<app.fqdn>/rest/plugins/1.0/), value is true if up",
 			[]string{
 				"url",
 			},
@@ -105,7 +107,7 @@ func newAtlassianUPMCollector() *atlassianUPMCollector {
 		),
 		atlassianUPMVersionsMetric: prometheus.NewDesc(
 			metricNamespace+"_plugin_version_available",
-			"Used to monitor the Atlassian Universal Plugin Manager (UPM) versions available, value is true if update available",
+			"metric used to get back the application being monitored plugin versions available, value is true if update available",
 			[]string{
 				"name",
 				"key",
@@ -215,7 +217,17 @@ func (collector *atlassianUPMCollector) Collect(ch chan<- prometheus.Metric) {
 		for _, plugin := range availablePluginsMap {
 			availableUpdate := false
 
-			if plugin.InstalledVersion != plugin.Version {
+			verInstalled, err := version.NewVersion(plugin.InstalledVersion)
+			if err != nil {
+				log.Debug("error turning plugin installed into version object")
+			}
+
+			verAvailable, err := version.NewVersion(plugin.Version)
+			if err != nil {
+				log.Debug("error turning available plugin into version object")
+			}
+
+			if verInstalled.LessThan(verAvailable) {
 				log.Debug("plugin: ", plugin.Name, ", is currently running: ", plugin.InstalledVersion, ", and can be upgraded to: ", plugin.Version)
 				availableUpdate = true
 			}
